@@ -21,6 +21,7 @@ from .utils import (
     CounterItem,
     KeyboardMonitor,
     Translator,
+    amm_home,
     convert_to_seconds,
     counter,
     doze,
@@ -297,6 +298,23 @@ class FacebookMarketplace(Marketplace):
         assert name == self.name
         super().__init__(name, browser, keyboard_monitor, logger)
         self.page: Page | None = None
+        self.session_state_path = amm_home / "facebook-storage-state.json"
+
+    @staticmethod
+    def _log_search_outcome(
+        logger: Logger, search_phrase: str, city: str, listings: List[Listing]
+    ) -> None:
+        """Report a failed Facebook search only when no listings were parsed."""
+        if not listings:
+            logger.error(
+                f"{hilight('[Search]', 'fail')} Failed to get search results for "
+                f"{search_phrase} from {city}"
+            )
+
+    def _save_session_after_search(self, listings: List[Listing]) -> None:
+        """Persist browser state only when Marketplace proves the session works."""
+        if listings:
+            self.save_session_state()
 
     @classmethod
     def get_config(cls: Type["FacebookMarketplace"], **kwargs: Any) -> FacebookMarketplaceConfig:
@@ -519,10 +537,11 @@ class FacebookMarketplace(Marketplace):
                 found_listings = FacebookSearchResultPage(
                     self.page, self.translator, self.logger
                 ).get_listings()
+                self._save_session_after_search(found_listings)
                 time.sleep(5)
                 if self.logger:
-                    self.logger.error(
-                        f"""{hilight("[Search]", "fail")} Failed to get search results for {search_phrase} from {city}"""
+                    self._log_search_outcome(
+                        self.logger, search_phrase, city, found_listings
                     )
 
                 counter.increment(CounterItem.SEARCH_PERFORMED, item_config.name)
@@ -554,7 +573,8 @@ class FacebookMarketplace(Marketplace):
                     except Exception as e:
                         if self.logger:
                             self.logger.error(
-                                f"""{hilight("[Retrieve]", "fail")} Failed to get item details: {e}"""
+                                f"{hilight('[Retrieve]', 'fail')} Failed to get item details "
+                                f"for {listing.post_url!r}: {type(e).__name__}: {e!r}"
                             )
                         continue
                     # currently we trust the other items from summary page a bit better
@@ -746,12 +766,11 @@ class FacebookSearchResultPage(WebPage):
                 self.logger.info(f"{hilight('[Retrieve]', 'dim')} {msg}")
             return []
 
-        # find the grid box
+        # Search by the stable semantic item URL instead of Facebook's generated
+        # grid wrappers/classes. Login, checkpoint, and consent pages have no
+        # such links and therefore correctly produce no listings.
         try:
-            valid_listings = (
-                self._get_listing_elements_by_traversing_header()
-                or self._get_listings_elements_by_children_counts()
-            )
+            valid_listings = self.page.query_selector_all('a[href*="/marketplace/item/"]')
         except KeyboardInterrupt:
             raise
         except Exception as e:
@@ -765,23 +784,49 @@ class FacebookSearchResultPage(WebPage):
             return []
 
         listings: List[Listing] = []
+        seen_ids: set[str] = set()
         for idx, listing in enumerate(valid_listings):
             try:
-                atag = listing.query_selector(
-                    ":scope > :first-child > :first-child > :first-child > :first-child > :first-child > :first-child > :first-child > :first-child"
-                )
-                if not atag:
-                    continue
+                atag = listing
                 post_url = atag.get_attribute("href") or ""
-                details_divs = atag.query_selector_all(":scope > :first-child > div")
-                if not details_divs:
+                id_match = re.search(r"/marketplace/item/(\d+)", post_url)
+                if not id_match or id_match.group(1) in seen_ids:
                     continue
-                details = details_divs[1]
-                divs = details.query_selector_all(":scope > div")
-                raw_price = "" if len(divs) < 1 else divs[0].text_content() or ""
-                title = "" if len(divs) < 2 else divs[1].text_content() or ""
-                # location can be empty in some rare cases
-                location = "" if len(divs) < 3 else (divs[2].text_content() or "")
+                listing_id = id_match.group(1)
+                seen_ids.add(listing_id)
+                details_divs = atag.query_selector_all(":scope > :first-child > div")
+                if len(details_divs) > 1:
+                    details = details_divs[1]
+                    divs = details.query_selector_all(":scope > div")
+                    raw_price = "" if len(divs) < 1 else divs[0].text_content() or ""
+                    title = "" if len(divs) < 2 else divs[1].text_content() or ""
+                    location = "" if len(divs) < 3 else (divs[2].text_content() or "")
+                else:
+                    # Current Marketplace cards expose price, title, and location
+                    # as text within the link rather than stable direct children.
+                    parts = atag.evaluate(
+                        """element => {
+                            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                            const parts = [];
+                            let node;
+                            while ((node = walker.nextNode())) {
+                                const text = (node.textContent || '').trim();
+                                if (text) parts.push(text);
+                            }
+                            return parts;
+                        }"""
+                    )
+                    price_index = next(
+                        (
+                            i
+                            for i, part in enumerate(parts)
+                            if re.search(r"(?i)(?:free|[$€£¥]\s*[\d,]|\b\d[\d,.]*\s*(?:USD|EUR|GBP)\b)", part)
+                        ),
+                        -1,
+                    )
+                    raw_price = "" if price_index < 0 else parts[price_index]
+                    title = "" if price_index < 0 or price_index + 1 >= len(parts) else parts[price_index + 1]
+                    location = "" if price_index < 0 or price_index + 2 >= len(parts) else parts[price_index + 2]
 
                 # get image
                 img = listing.query_selector("img")
@@ -798,7 +843,7 @@ class FacebookSearchResultPage(WebPage):
                     Listing(
                         marketplace="facebook",
                         name="",
-                        id=post_url.split("?")[0].rstrip("/").split("/")[-1],
+                        id=listing_id,
                         title=title,
                         image=image,
                         price=price,

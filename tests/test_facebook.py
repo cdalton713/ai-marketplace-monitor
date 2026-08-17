@@ -7,6 +7,43 @@ from pytest_playwright.pytest_playwright import CreateContextCallback  # type: i
 from ai_marketplace_monitor.facebook import FacebookSearchResultPage, parse_listing
 
 
+def test_search_page_ignores_non_listing_layout(new_context: CreateContextCallback) -> None:
+    page = new_context(java_script_enabled=False).new_page()
+    nested = "<div>" * 8 + "not a listing" + "</div>" * 8
+    siblings = "".join([f"<div>{nested if i == 0 else f'login control {i}'}</div>" for i in range(11)])
+    page.set_content(f"<main><img src='facebook.svg'>{siblings}</main>")
+
+    listings = FacebookSearchResultPage(page).get_listings()
+
+    assert listings == []
+
+
+def test_search_page_parses_semantic_item_links_without_grid_wrappers(
+    new_context: CreateContextCallback,
+) -> None:
+    page = new_context(java_script_enabled=False).new_page()
+    page.set_content(
+        """
+        <main>
+          <a href="/marketplace/item/123456789/?ref=search">
+            <img src="https://example.com/printer.jpg">
+            <span>$125</span><span>Bambu Lab P1S</span><span>Denver, Colorado</span>
+          </a>
+        </main>
+        """
+    )
+
+    listings = FacebookSearchResultPage(page).get_listings()
+
+    assert len(listings) == 1
+    assert listings[0].id == "123456789"
+    assert listings[0].post_url == "https://www.facebook.com/marketplace/item/123456789/?ref=search"
+    assert listings[0].price == "$125"
+    assert listings[0].title == "Bambu Lab P1S"
+    assert listings[0].location == "Denver, Colorado"
+    assert listings[0].image == "https://example.com/printer.jpg"
+
+
 def test_search_page(
     new_context: CreateContextCallback, filename: str = "search_result_1.html"
 ) -> None:

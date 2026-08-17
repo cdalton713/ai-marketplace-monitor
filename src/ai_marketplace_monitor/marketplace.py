@@ -2,6 +2,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from logging import Logger
+from pathlib import Path
 from typing import Any, Callable, Generator, Generic, List, Type, TypeVar
 
 from playwright.sync_api import Browser, ElementHandle, Locator, Page  # type: ignore
@@ -465,6 +466,7 @@ class Marketplace(Generic[TMarketplaceConfig, TItemConfig]):
         self.translator = Translator()
         self.logger = logger
         self.page: Page | None = None
+        self.session_state_path: Path | None = None
 
     @classmethod
     def get_config(cls: Type["Marketplace"], **kwargs: Any) -> TMarketplaceConfig:
@@ -513,15 +515,26 @@ class Marketplace(Generic[TMarketplaceConfig, TItemConfig]):
             self.page = None
 
         if self.page is None:
-            context = self.browser.new_context(
-                proxy=(
+            context_options: dict[str, Any] = {
+                "proxy": (
                     None
                     if self.config.monitor_config is None
                     else self.config.monitor_config.get_proxy_options()
                 )
-            )
+            }
+            if self.session_state_path is not None and self.session_state_path.exists():
+                context_options["storage_state"] = str(self.session_state_path)
+            context = self.browser.new_context(**context_options)
             self.page = context.new_page()
         return self.page
+
+    def save_session_state(self: "Marketplace") -> None:
+        """Persist cookies/local storage so interactive logins survive restarts."""
+        if self.page is None or self.session_state_path is None:
+            return
+        self.session_state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.page.context.storage_state(path=str(self.session_state_path))
+        self.session_state_path.chmod(0o600)
 
     def goto_url(self: "Marketplace", url: str, attempt: int = 0) -> None:
         try:

@@ -415,16 +415,18 @@ def create_app(
     vnc_host = os.environ.get("AIMM_VNC_HOST", "127.0.0.1")
     vnc_port = int(os.environ.get("AIMM_VNC_PORT", "5900"))
     if os.environ.get("AIMM_ENABLE_VNC") == "1" and Path(novnc_dir).is_dir():
-        app.mount("/vnc", StaticFiles(directory=novnc_dir, html=True), name="vnc")
 
         @app.websocket("/ws/vnc")
+        @app.websocket("/vnc/ws/vnc")
         async def ws_vnc(websocket: WebSocket) -> None:
             if not is_open():
                 session = websocket.cookies.get(SESSION_COOKIE)
                 if not session or sessions.validate(session) is None:
                     await websocket.close(code=4401)
                     return
-            await websocket.accept(subprotocol="binary")
+            # noVNC does not request a WebSocket subprotocol. Echoing `binary`
+            # makes Chromium reject the handshake before VNC bytes can flow.
+            await websocket.accept()
             try:
                 reader, writer = await asyncio.open_connection(vnc_host, vnc_port)
             except OSError:
@@ -456,6 +458,10 @@ def create_app(
                         pass
 
             await asyncio.gather(ws_to_tcp(), tcp_to_ws(), return_exceptions=True)
+
+        # Register the bridge before the static mount: Starlette resolves routes
+        # in registration order, and the mount would otherwise consume /vnc/ws/vnc.
+        app.mount("/vnc", StaticFiles(directory=novnc_dir, html=True), name="vnc")
 
     # ------------------------------------------------------------------
     # Static UI

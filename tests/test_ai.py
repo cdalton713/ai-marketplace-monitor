@@ -1,6 +1,6 @@
 import pytest
 
-from ai_marketplace_monitor.ai import OllamaBackend, OllamaConfig
+from ai_marketplace_monitor.ai import OllamaBackend, OllamaConfig, OpenAIBackend, OpenAIConfig
 from ai_marketplace_monitor.facebook import FacebookItemConfig, FacebookMarketplaceConfig
 from ai_marketplace_monitor.listing import Listing
 
@@ -34,6 +34,23 @@ def test_prompt(
     assert listing.condition in prompt
     assert listing.price in prompt
     assert listing.post_url in prompt
+
+
+def test_openai_messages_include_listing_image(
+    listing: Listing,
+    item_config: FacebookItemConfig,
+    marketplace_config: FacebookMarketplaceConfig,
+) -> None:
+    listing.image = "https://example.com/listing.jpg"
+    backend = OpenAIBackend(OpenAIConfig(name="vision", api_key="test"))
+
+    messages = backend.get_messages(listing, item_config, marketplace_config)
+
+    assert messages[1]["content"][0]["type"] == "text"
+    assert messages[1]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": listing.image},
+    }
 
 
 def test_extra_prompt(

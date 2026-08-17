@@ -277,6 +277,27 @@ class OpenAIBackend(AIBackend):
             if self.logger:
                 self.logger.info(f"""{hilight("[AI]", "name")} {self.config.name} connected.""")
 
+    def get_messages(
+        self: "OpenAIBackend",
+        listing: Listing,
+        item_config: TItemConfig,
+        marketplace_config: TMarketplaceConfig,
+    ) -> list[dict[str, Any]]:
+        prompt = self.get_prompt(listing, item_config, marketplace_config)
+        user_content: str | list[dict[str, Any]] = prompt
+        if listing.image:
+            user_content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": listing.image}},
+            ]
+        return [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant that can confirm if a user's search criteria matches the item he is interested in.",
+            },
+            {"role": "user", "content": user_content},
+        ]
+
     def evaluate(
         self: "OpenAIBackend",
         listing: Listing,
@@ -285,7 +306,6 @@ class OpenAIBackend(AIBackend):
     ) -> AIResponse:
         # ask openai to confirm the item is correct
         counter.increment(CounterItem.AI_QUERY, item_config.name)
-        prompt = self.get_prompt(listing, item_config, marketplace_config)
         res: AIResponse | None = AIResponse.from_cache(listing, item_config, marketplace_config)
         if res is not None:
             if self.logger:
@@ -303,13 +323,7 @@ class OpenAIBackend(AIBackend):
             try:
                 response = self.client.chat.completions.create(
                     model=self.config.model or self.default_model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant that can confirm if a user's search criteria matches the item he is interested in.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
+                    messages=self.get_messages(listing, item_config, marketplace_config),
                     stream=False,
                 )
                 break
