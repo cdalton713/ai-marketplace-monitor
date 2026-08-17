@@ -21,6 +21,7 @@ from .utils import (
     CounterItem,
     KeyboardMonitor,
     Translator,
+    activity,
     amm_home,
     convert_to_seconds,
     counter,
@@ -311,6 +312,19 @@ class FacebookMarketplace(Marketplace):
                 f"{search_phrase} from {city}"
             )
 
+    @staticmethod
+    def _record_search(
+        *, item: str, marketplace: str, phrase: str, city: str, listing_count: int
+    ) -> None:
+        """Persist a compact proof that a Marketplace query completed."""
+        activity.record_search(
+            item=item,
+            marketplace=marketplace,
+            phrase=phrase,
+            city=city,
+            listing_count=listing_count,
+        )
+
     def _save_session_after_search(self, listings: List[Listing]) -> None:
         """Persist browser state only when Marketplace proves the session works."""
         if listings:
@@ -545,6 +559,13 @@ class FacebookMarketplace(Marketplace):
                     )
 
                 counter.increment(CounterItem.SEARCH_PERFORMED, item_config.name)
+                self._record_search(
+                    item=item_config.name,
+                    marketplace=self.name,
+                    phrase=search_phrase,
+                    city=cname or city,
+                    listing_count=len(found_listings),
+                )
 
                 # go to each item and get the description
                 # if we have not done that before

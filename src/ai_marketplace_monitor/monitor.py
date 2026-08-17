@@ -23,6 +23,7 @@ from .utils import (
     KeyboardMonitor,
     SleepStatus,
     Translator,
+    activity,
     aimm_event,
     amm_home,
     cache,
@@ -35,6 +36,11 @@ from .utils import (
 
 class MarketplaceMonitor:
     active_marketplaces: ClassVar = {}
+
+    @staticmethod
+    def _record_rating(*, item: str, score: int) -> None:
+        """Persist an AI score for the daily activity recap."""
+        activity.record_rating(item=item, score=score)
 
     def __init__(
         self: "MarketplaceMonitor",
@@ -202,6 +208,7 @@ class MarketplaceMonitor:
             res = self.evaluate_by_ai(
                 listing, item_config=item_config, marketplace_config=marketplace_config
             )
+            self._record_rating(item=item_config.name, score=res.score)
             if self.logger:
                 if res.comment == AIResponse.NOT_EVALUATED:
                     if res.name:

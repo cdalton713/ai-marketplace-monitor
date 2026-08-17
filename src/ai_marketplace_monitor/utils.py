@@ -44,11 +44,14 @@ from PIL import Image
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from .activity import ActivityLedger
+
 # home directory for all settings and caches
 amm_home = Path.home() / ".ai-marketplace-monitor"
 amm_home.mkdir(parents=True, exist_ok=True)
 
 cache = Cache(amm_home)
+activity = ActivityLedger(amm_home / "activity.sqlite3")
 
 
 TConfigType = TypeVar("TConfigType", bound="BaseConfig")
